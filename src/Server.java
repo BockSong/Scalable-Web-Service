@@ -5,7 +5,23 @@
  * cloud-hosted, multi-tier web service.
  */
 
+import java.io.*;
+import java.math.*;
+
 public class Server {
+	/*
+	 * is_primServer: check if a VM process is the primary server
+	 */
+	private static double get_avgCAR (int hour) {
+		double[] avgCAR = {0.5, 
+						  0.3, 0.1, 0.1, 0.1, 0.2, 
+						  0.3, 0.7, 1.0, 0.8, 0.8,
+						  0.8, 1.0, 1.1, 1.0, 0.8,
+						  0.7, 0.8, 1.0, 1.2, 1.5,
+						  1.4, 1.0, 0.8};
+		return avgCAR[hour];
+	}
+
 	/*
 	 * is_primServer: check if a VM process is the primary server
 	 */
@@ -27,9 +43,10 @@ public class Server {
 
 		if (is_primServer(vm_id)) {
 			int tod = (int) SL.getTime();
-			System.out.println("Time of Day: " + tod);
+			double CAR = get_avgCAR(tod);
+			System.out.println("Given arrival rate: " + CAR);
 	
-			int num_servers = tod / 2; // TODO: statically decide the num of servers
+			int num_servers = 4;//(int) (Math.ceil(CAR) * 2); // TODO: statically decide the num of servers
 			
 			int i, chl_vmID;
 			// launch num_servers VMs to process the jobs
