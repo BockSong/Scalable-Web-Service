@@ -46,11 +46,12 @@ public class Server {
 			double CAR = get_avgCAR(tod);
 			System.out.println("Given arrival rate: " + CAR);
 	
-			int num_servers = 4;//(int) (Math.ceil(CAR) * 2); // TODO: statically decide the num of servers
+			int num_chdServers = (int) (Math.ceil(CAR * 3.9)); // statically decide the num of servers
+			System.out.println("num_chdServers: " + num_chdServers);
 			
 			int i, chl_vmID;
-			// launch num_servers VMs to process the jobs
-			for (i = 0; i < num_servers; i++) {
+			// launch num_chdServers VMs to process the jobs
+			for (i = 0; i < num_chdServers; i++) {
 				chl_vmID = SL.startVM();
 			}
 		}
