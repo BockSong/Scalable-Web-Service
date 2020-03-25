@@ -12,14 +12,25 @@
 
 import java.io.*;
 import java.math.*;
+import java.util.concurrent.*;
+import java.rmi.Naming;
+import java.rmi.Remote;
+import java.rmi.RemoteException;
+import java.rmi.server.UnicastRemoteObject;
+import java.rmi.registry.*;
 
-public class Server {
-
+// Server object definition
+public class Server extends UnicastRemoteObject implements ServerIntf {
+	// Server Interface for the primary server
 	private static ServerIntf prim_server;
-	
-	private static ConcurrentLinkedQueue<Cloud.FrontEndOps.Request> requests = 
+	// Thread-safe Queue for requests
+	private static ConcurrentLinkedQueue<Cloud.FrontEndOps.Request> request_queue = 
 			   				new ConcurrentLinkedQueue<Cloud.FrontEndOps.Request>();
 	
+	public Server() throws RemoteException {
+		super(0);
+	}
+					 
 	/*
 	 * get_avgCAR: given a time of day (hour), return the average client arrival rate
 	 */
@@ -42,10 +53,11 @@ public class Server {
 		return vm_id == 1;
 	}
 
-    public synchronized Cloud.FrontEndOps.Request getRequest()
+    public synchronized ReqInfo getRequest()
                   throws RemoteException {
-		Cloud.FrontEndOps.Request r = requests.poll();
-		return r;
+		Cloud.FrontEndOps.Request r = request_queue.poll();
+		ReqInfo request = new ReqInfo(r);
+		return request;
 	};
 
 	public static void main ( String args[] ) throws Exception {
@@ -58,6 +70,9 @@ public class Server {
 		// serverLib is used to access the database
 		ServerLib SL = new ServerLib( cloud_ip, cloud_port );
 
+		// use another port number for RMI
+		cloud_port += 1;
+		
 		// front-end 
 		if (is_primServer(vm_id)) {
 			// register Java RMI
@@ -95,7 +110,7 @@ public class Server {
 
 			while (true) {
 				Cloud.FrontEndOps.Request r = SL.getNextRequest();
-				requests.offer(r);
+				request_queue.offer(r);
 			}
 		}
 		// application tier
@@ -110,8 +125,8 @@ public class Server {
 			
 			// main loop to process jobs
 			while (true) {
-				Cloud.FrontEndOps.Request r = prim_server.getRequest();
-				SL.processRequest( r );
+				ReqInfo request = prim_server.getRequest();
+				SL.processRequest( request.r );
 			}
 		}
 	}
