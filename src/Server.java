@@ -70,24 +70,13 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 		// serverLib is used to access the database
 		ServerLib SL = new ServerLib( cloud_ip, cloud_port );
 
-		// use another port number for RMI
-		cloud_port += 1;
-		
 		// front-end 
 		if (is_primServer(vm_id)) {
-			// register Java RMI
-			try {
-				LocateRegistry.createRegistry(cloud_port);
-			}
-			catch (RemoteException e) {
-				System.out.println("RemoteException Catched!");
-			}
-
+			// No need to createRegistry again
 			Server server = new Server(); 
-			
 			Naming.rebind("//localhost:" + cloud_port + "/ServerIntf", server);
 			System.out.println("VM " + vm_id + " (front-end) set up.");
-			
+
 			// register with load balancer so requests are sent to this server
 			SL.register_frontend();
 	
@@ -110,7 +99,10 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
 			while (true) {
 				Cloud.FrontEndOps.Request r = SL.getNextRequest();
-				request_queue.offer(r);
+				if (!request_queue.offer(r)) {
+					System.out.println("uncheckedException: Request queue is full accidentally");
+				}
+				//System.out.println("Request queue length: " + request_queue.size());
 			}
 		}
 		// application tier
@@ -122,11 +114,14 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			} catch (Exception e) {
 				System.out.println("NotBoundException in connection.");
 			}
-			
+
 			// main loop to process jobs
 			while (true) {
 				ReqInfo request = prim_server.getRequest();
-				SL.processRequest( request.r );
+				if (request.r != null) {
+					SL.processRequest( request.r );
+					//System.out.println("Handle request successfully.");
+				}
 			}
 		}
 	}
