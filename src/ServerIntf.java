@@ -7,8 +7,8 @@ import java.rmi.RemoteException;
 public interface ServerIntf extends Remote {
             public ReqInfo getRequest()
                             throws RemoteException;
-/*
-    public int getVersionID( String path )
-                  throws RemoteException;
-                  */
+
+            public Boolean rmChdServer()
+                            throws RemoteException;
+                            
 }

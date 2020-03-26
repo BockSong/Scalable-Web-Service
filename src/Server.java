@@ -21,10 +21,26 @@ import java.rmi.registry.*;
 
 // Server object definition
 public class Server extends UnicastRemoteObject implements ServerIntf {
+	// ------------------ Adjustable paramaters ------------------------
+	// for scale-out
+	private static double QLEN_FACTOR = 1.2;
+	// for scale-in
+	private static int MAX_IDLE_TIME = 2000;
+	private static double MIN_REQ_RATE = 0.5;
+	// -----------------------------------------------------------------
+
+	private static int num_chdServers; 
+	private static ServerLib SL;
 	// Server Interface for the primary server
 	private static ServerIntf prim_server;
+
+	private static long startTime = System.currentTimeMillis();
+	private static long endTime = System.currentTimeMillis();
+	private static double response_time;
+	private static double server_load;
+	private static double request_rate;
 	// Thread-safe Queue for requests
-	private static ConcurrentLinkedQueue<Cloud.FrontEndOps.Request> request_queue = 
+	private static ConcurrentLinkedQueue<Cloud.FrontEndOps.Request> req_queue = 
 			   				new ConcurrentLinkedQueue<Cloud.FrontEndOps.Request>();
 	
 	public Server() throws RemoteException {
@@ -49,16 +65,35 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	 * Return: True for prime server and false for secondary server
 	 */
 	private static Boolean is_primServer (int vm_id) {
-		// TODO: cannot use this if need multiple front-end servers
 		return vm_id == 1;
 	}
 
-    public synchronized ReqInfo getRequest()
-                  throws RemoteException {
-		Cloud.FrontEndOps.Request r = request_queue.poll();
+    public synchronized ReqInfo getRequest() throws RemoteException {
+		Cloud.FrontEndOps.Request r = req_queue.poll();
 		ReqInfo request = new ReqInfo(r);
 		return request;
 	};
+
+	/*
+	 * rmChdServer: inform the primary server that a child server is going to terminate
+	 * Return: True for success and false for an error
+	 */
+	public Boolean rmChdServer() throws RemoteException {
+		try {
+			num_chdServers -= 1;
+			return true;
+		} catch (Exception e) {
+            System.out.println("Error: " + e.getMessage());
+            e.printStackTrace();
+			return false;
+		}
+	}
+
+	private static void shutdown(int vm_id) {
+		SL.endVM(vm_id);
+		// TODO:
+		//UnicastRemoteObject.unexportObject(this, true);
+	}
 
 	public static void main ( String args[] ) throws Exception {
 		if (args.length != 3) throw new Exception("Need 3 args: <cloud_ip> <cloud_port> <VM id>");
@@ -68,9 +103,9 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 		int vm_id = Integer.parseInt(args[2]);
 
 		// serverLib is used to access the database
-		ServerLib SL = new ServerLib( cloud_ip, cloud_port );
+		SL = new ServerLib( cloud_ip, cloud_port );
 
-		// front-end 
+		// front-end, only get request from clients
 		if (is_primServer(vm_id)) {
 			// No need to createRegistry again
 			Server server = new Server(); 
@@ -85,31 +120,42 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			double CAR = get_avgCAR(tod);
 			System.out.println("Given arrival rate: " + CAR);
 	
-			int num_chdServers = (int) (Math.ceil(CAR * 3.9)); // statically decide the num of servers
+			// Statically decide the num of servers as a starter
+			num_chdServers = (int) (Math.ceil(CAR * 3.9));
 			System.out.println("num_chdServers: " + num_chdServers);
 			
-			// TODO: check if need to scale-out for front-end
+			// TODO: scale-out for front-end and maintain record for front-end/middle tier
 
 			int i, chl_vmID;
 			// launch num_chdServers VMs to process the jobs
 			for (i = 0; i < num_chdServers; i++) {
 				chl_vmID = SL.startVM();
 			}
-			// TODO: check if need to scale-out or shrink for app tier
 
 			while (true) {
 				Cloud.FrontEndOps.Request r = SL.getNextRequest();
-				if (!request_queue.offer(r)) {
+				if (!req_queue.offer(r)) {
 					System.out.println("uncheckedException: Request queue is full accidentally");
 				}
-				//System.out.println("Request queue length: " + request_queue.size());
+
+				// scale out for app tier
+				// TODO: add more conditions like long reponse time, high load
+				response_time = 0;
+				server_load = 0;
+				if (req_queue.size() > num_chdServers * QLEN_FACTOR) {
+					System.out.print("Queue size: " + req_queue.size() + 
+									 ", num_servers: " + num_chdServers);
+					chl_vmID = SL.startVM();
+					num_chdServers++;
+				}
 			}
 		}
-		// application tier
+		// application tier, only process request
 		else {
 			// connect to server with Java RMI	
 			try {
-				prim_server = (ServerIntf) Naming.lookup("//" + cloud_ip + ":" + cloud_port + "/ServerIntf");
+				prim_server = (ServerIntf) Naming.lookup("//" + cloud_ip + ":" 
+												  + cloud_port + "/ServerIntf");
 				System.out.println("VM " + vm_id + " (app tier) set up, connection built.");
 			} catch (Exception e) {
 				System.out.println("NotBoundException in connection.");
@@ -120,10 +166,17 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 				ReqInfo request = prim_server.getRequest();
 				if (request.r != null) {
 					SL.processRequest( request.r );
-					//System.out.println("Handle request successfully.");
+					startTime = System.currentTimeMillis();
+				}
+
+				// TODO: how to calculate request_rate
+				request_rate = 1;
+				endTime = System.currentTimeMillis();
+				if (endTime - startTime > MAX_IDLE_TIME || request_rate < MIN_REQ_RATE) {
+					prim_server.rmChdServer();
+					shutdown(vm_id);
 				}
 			}
 		}
 	}
 }
-
