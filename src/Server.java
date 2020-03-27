@@ -26,7 +26,10 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static double QLEN_FACTOR = 1.2;
 	// for scale-in
 	private static int MAX_IDLE_TIME = 2000;
-	private static double MIN_REQ_RATE = 0.5;
+	private static double MIN_REQ_RATE = 0.6; // not yet used
+	// for drop
+	private static long PURCHASE_TH = 1900;
+	private static long BROWSE_TH = 900;
 	// -----------------------------------------------------------------
 
 	private static int num_chdServers; 
@@ -40,9 +43,13 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static double server_load;
 	private static double request_rate;
 	// Thread-safe Queue for requests
-	private static ConcurrentLinkedQueue<Cloud.FrontEndOps.Request> req_queue = 
-			   				new ConcurrentLinkedQueue<Cloud.FrontEndOps.Request>();
-	
+	private static ConcurrentLinkedQueue<Cloud.FrontEndOps.Request> req_queue = new 
+			   				ConcurrentLinkedQueue<Cloud.FrontEndOps.Request>();
+	// map the requests and the time they are added
+	private static ConcurrentHashMap<Cloud.FrontEndOps.Request, Long> req_time = new 
+							ConcurrentHashMap<Cloud.FrontEndOps.Request, Long>();
+	private static Object queue_lock = new Object();  // lock for accessing request's time
+
 	public Server() throws RemoteException {
 		super(0);
 	}
@@ -68,10 +75,21 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 		return vm_id == 1;
 	}
 
+	/*
+	 * getRequest: get a request from the queue.
+	 * Return: ReqInfo of the request, or null if the queue is empty
+	 */
     public synchronized ReqInfo getRequest() throws RemoteException {
 		Cloud.FrontEndOps.Request r = req_queue.poll();
-		ReqInfo request = new ReqInfo(r);
-		return request;
+		ReqInfo request;
+		if (r != null) {
+			synchronized (queue_lock) {
+				request = new ReqInfo(r, req_time.get(r));
+				req_time.remove(r);
+			}
+			return request;
+		}
+		return null;
 	};
 
 	/*
@@ -134,16 +152,19 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
 			while (true) {
 				Cloud.FrontEndOps.Request r = SL.getNextRequest();
-				if (!req_queue.offer(r)) {
-					System.out.println("uncheckedException: Request queue is full accidentally");
+				synchronized (queue_lock) {
+					if (!req_queue.offer(r)) {
+						System.out.println("uncheckedException: Request queue is full accidentally");
+					}
+					req_time.put(r, System.currentTimeMillis());
 				}
 
 				// scale out for app tier
 				// TODO: add more conditions like long reponse time, high load
-				response_time = 0;
-				server_load = 0;
+				//response_time = 0;
+				//server_load = 0;
 				if (req_queue.size() > num_chdServers * QLEN_FACTOR) {
-					System.out.print("Queue size: " + req_queue.size() + 
+					System.out.println("Scale out! Queue size: " + req_queue.size() + 
 									 ", num_servers: " + num_chdServers);
 					chl_vmID = SL.startVM();
 					num_chdServers++;
@@ -164,15 +185,28 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			// main loop to process jobs
 			while (true) {
 				ReqInfo request = prim_server.getRequest();
-				if (request.r != null) {
-					SL.processRequest( request.r );
-					startTime = System.currentTimeMillis();
+				if (request != null) {
+					Cloud.FrontEndOps.Request r = request.r;
+					long upper_bound;
+					if (r.isPurchase) {
+						upper_bound = PURCHASE_TH;
+					}
+					else {
+						upper_bound = BROWSE_TH;
+					}
+					// Drop: don't handle the request if it‘s too late
+					endTime = System.currentTimeMillis();
+					if (endTime - request.waiting_time < upper_bound) {
+						SL.processRequest(r);
+						startTime = System.currentTimeMillis();
+					}
 				}
 
-				// TODO: how to calculate request_rate
+				// TODO: define request_rate, add more policies
 				request_rate = 1;
 				endTime = System.currentTimeMillis();
 				if (endTime - startTime > MAX_IDLE_TIME || request_rate < MIN_REQ_RATE) {
+					System.out.println("Scale in! Waiting time: " + (endTime - startTime));
 					prim_server.rmChdServer();
 					shutdown(vm_id);
 				}
