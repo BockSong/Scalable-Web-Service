@@ -1,7 +1,7 @@
 all: Server.class
 
 %.class: %.java
-	javac $<
+	javac -encoding ascii $<
 
 clean:
 	rm -f *.class

@@ -194,7 +194,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 					else {
 						upper_bound = BROWSE_TH;
 					}
-					// Drop: don't handle the request if it‘s too late
+					// Drop: don't handle the request if it's too late
 					endTime = System.currentTimeMillis();
 					if (endTime - request.waiting_time < upper_bound) {
 						SL.processRequest(r);
@@ -202,10 +202,12 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 					}
 				}
 
+				// scale-in for app-tier
 				// TODO: define request_rate, add more policies
 				request_rate = 1;
 				endTime = System.currentTimeMillis();
 				if (endTime - startTime > MAX_IDLE_TIME || request_rate < MIN_REQ_RATE) {
+					// TODO: don't do scale-in if there are too less servers
 					System.out.println("Scale in! Waiting time: " + (endTime - startTime));
 					prim_server.rmChdServer();
 					shutdown(vm_id);
