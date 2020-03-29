@@ -23,13 +23,13 @@ import java.rmi.registry.*;
 public class Server extends UnicastRemoteObject implements ServerIntf {
 	// ------------------ Adjustable paramaters ------------------------
 	// for scale-out
-	private static double QLEN_FACTOR = 1.2;
+	private static double QLEN_FACTOR = 1.5;
 	// for scale-in
-	private static int MAX_IDLE_TIME = 2000;
+	private static int MAX_IDLE_TIME = 2300;
 	private static double MIN_REQ_RATE = 0.6; // not yet used
 	// for drop
-	private static long PURCHASE_TH = 1900;
-	private static long BROWSE_TH = 900;
+	private static long PURCHASE_TH = 2000;
+	private static long BROWSE_TH = 1000;
 	// -----------------------------------------------------------------
 
 	private static int num_chdServers; 
