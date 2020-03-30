@@ -8,7 +8,7 @@ public interface ServerIntf extends Remote {
             public ReqInfo getRequest()
                             throws RemoteException;
 
-            public Boolean rmChdServer()
+            public Boolean requestEnd()
                             throws RemoteException;
-                            
+            
 }

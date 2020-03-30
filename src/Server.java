@@ -24,7 +24,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	// ------------------ Adjustable paramaters ------------------------
 	// for scale-out
 	private static double QLEN_FACTOR = 1.5;
-	// for scale-in
+	// for scale-down
 	private static int MAX_IDLE_TIME = 2300;
 	private static double MIN_REQ_RATE = 0.6; // not yet used
 	// for drop
@@ -32,7 +32,9 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static long BROWSE_TH = 1000;
 	// -----------------------------------------------------------------
 
+	// number of secondary servers
 	private static int num_chdServers; 
+	// serverLib to access the database
 	private static ServerLib SL;
 	// Server Interface for the primary server
 	private static ServerIntf prim_server;
@@ -93,18 +95,16 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	};
 
 	/*
-	 * rmChdServer: inform the primary server that a child server is going to terminate
-	 * Return: True for success and false for an error
+	 * requestEnd: (child server) request a permission to terminate itself.
+	 * 			  primary server reject it if there will be too few servers.
+	 * Return: True for permiting or false for not
 	 */
-	public Boolean rmChdServer() throws RemoteException {
-		try {
+	public Boolean requestEnd() throws RemoteException {
+		if (num_chdServers >= 2) {
 			num_chdServers -= 1;
 			return true;
-		} catch (Exception e) {
-            System.out.println("Error: " + e.getMessage());
-            e.printStackTrace();
-			return false;
 		}
+		return false;
 	}
 
 	private static void shutdown(int vm_id) {
@@ -120,7 +120,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 		int cloud_port = Integer.parseInt(args[1]);
 		int vm_id = Integer.parseInt(args[2]);
 
-		// serverLib is used to access the database
 		SL = new ServerLib( cloud_ip, cloud_port );
 
 		// front-end, only get request from clients
@@ -202,15 +201,16 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 					}
 				}
 
-				// scale-in for app-tier
+				// scale down for app-tier
 				// TODO: define request_rate, add more policies
 				request_rate = 1;
 				endTime = System.currentTimeMillis();
 				if (endTime - startTime > MAX_IDLE_TIME || request_rate < MIN_REQ_RATE) {
-					// TODO: don't do scale-in if there are too less servers
-					System.out.println("Scale in! Waiting time: " + (endTime - startTime));
-					prim_server.rmChdServer();
-					shutdown(vm_id);
+					// scale down only with the permission of primary server
+					if (prim_server.requestEnd()) {
+						shutdown(vm_id);
+						System.out.println("Scale down! Idle time: " + (endTime - startTime));
+					}
 				}
 			}
 		}
