@@ -193,7 +193,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 					else {
 						upper_bound = BROWSE_TH;
 					}
-					// Drop: don't handle the request if it's too late
+					// Drop: don't handle the request if it's already too late
 					endTime = System.currentTimeMillis();
 					if (endTime - request.waiting_time < upper_bound) {
 						SL.processRequest(r);
@@ -206,7 +206,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 				request_rate = 1;
 				endTime = System.currentTimeMillis();
 				if (endTime - startTime > MAX_IDLE_TIME || request_rate < MIN_REQ_RATE) {
-					// scale down only with the permission of primary server
+					// scale down only with the permission from the primary server
 					if (prim_server.requestEnd()) {
 						shutdown(vm_id);
 						System.out.println("Scale down! Idle time: " + (endTime - startTime));
