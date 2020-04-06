@@ -5,7 +5,7 @@
  * 
  * Server.java - A scalable web service
  * 
- * A server class which implements various techniques to scale-out a simulated,
+ * A server class which implements various techniques to scale out a simulated,
  * cloud-hosted, multi-tier web service.
  * 
  */
@@ -22,9 +22,9 @@ import java.rmi.registry.*;
 // Server object definition
 public class Server extends UnicastRemoteObject implements ServerIntf {
 	// ------------------ Adjustable paramaters ------------------------
-	// for scale-out
+	// for scale up
 	private static double QLEN_FACTOR = 1.6;
-	// for scale-down
+	// for scale down
 	private static int MAX_IDLE_TIME = 2300;
 	private static double MIN_REQ_RATE = 0.6; // not yet used
 	// for drop
@@ -32,11 +32,12 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static long BROWSE_TH = 1000;
 	// -----------------------------------------------------------------
 
-	// number of secondary servers
-	private static int num_chdServers; 
+	// number of child servers
+	private static int num_frontTier; 
+	private static int num_midTier; 
 	// serverLib to access the database
 	private static ServerLib SL;
-	// Server Interface for the primary server
+	// Server Interface for the primary server (used by child servers)
 	private static ServerIntf prim_server;
 
 	private static long startTime = System.currentTimeMillis();
@@ -44,6 +45,9 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static double response_time;
 	private static double server_load;
 	private static double request_rate;
+	// map the ID of VMs and their roles ("front" or "middle")
+	private static ConcurrentHashMap<Integer, String> child_role = new 
+							ConcurrentHashMap<Integer, String>();
 	// Thread-safe Queue for requests
 	private static ConcurrentLinkedQueue<Cloud.FrontEndOps.Request> req_queue = new 
 			   				ConcurrentLinkedQueue<Cloud.FrontEndOps.Request>();
@@ -55,7 +59,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	public Server() throws RemoteException {
 		super(0);
 	}
-					 
+
 	/*
 	 * get_avgCAR: given a time of day (hour), return the average client arrival rate
 	 */
@@ -71,10 +75,16 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
 	/*
 	 * is_primServer: check if a VM process is the primary server
-	 * Return: True for prime server and false for secondary server
+	 * Return: True for prime server and false for child server
 	 */
 	private static Boolean is_primServer (int vm_id) {
 		return vm_id == 1;
+	}
+
+	private static void shutdown(int vm_id) {
+		SL.endVM(vm_id);
+		// TODO: end VMs super cleanly (if needed)
+		//UnicastRemoteObject.unexportObject(this, true);
 	}
 
 	/*
@@ -100,20 +110,99 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	 * Return: True for permiting or false for not
 	 */
 	public Boolean requestEnd() throws RemoteException {
-		if (num_chdServers >= 2) {
-			num_chdServers -= 1;
+		if (num_midTier >= 2) {
+			num_midTier -= 1;
 			return true;
 		}
 		return false;
 	}
 
-	private static void shutdown(int vm_id) {
-		SL.endVM(vm_id);
-		// TODO:
-		//UnicastRemoteObject.unexportObject(this, true);
+	/*
+	 * askRole: (child server) ask the prime server for the role.
+	 * Return: a string indicates its role. ("front" or "middle")
+	 */
+	public String askRole(int vm_id) throws RemoteException {
+		return child_role.get(vm_id);
 	}
 
-	public static void main ( String args[] ) throws Exception {
+	/*
+	 * frontTier: perform as front tier server, only get request from clients.
+	 */
+	private static synchronized void frontTier(int vm_id) {
+		while (true) {
+			Cloud.FrontEndOps.Request r = SL.getNextRequest();
+			synchronized (queue_lock) {
+				// TODO: if prime_server
+				if (!req_queue.offer(r)) {
+					System.out.println("uncheckedException: Request queue is full accidentally");
+				}
+				req_time.put(r, System.currentTimeMillis());
+			}
+
+			// scale out (iff this is a prime server)
+			if (is_primServer(vm_id)) {
+				int chl_vmID;
+				// TODO: scale out front tier
+
+				// scale out middle tier
+				// TODO: add more conditions like long reponse time, high load
+				response_time = 0;
+				server_load = 0;
+				if (req_queue.size() > num_midTier * QLEN_FACTOR) {
+					System.out.println("Scale up! Queue size: " + req_queue.size() + 
+									", num_midTier: " + num_midTier);
+					chl_vmID = SL.startVM();
+					child_role.put(chl_vmID, "middle");
+					num_midTier++;
+				}
+			}
+			// check if need to scale down (iff this is a child server)
+			else {
+				// TODO: scale down front tier
+				;
+			}
+		}
+	}
+
+	/*
+	 * middleTier: perform as middle tier server, only process request.
+	 */
+	private static synchronized void middleTier(int vm_id) throws Exception {
+		// main loop to process jobs
+		while (true) {
+			ReqInfo request = prim_server.getRequest();
+			if (request != null) {
+				Cloud.FrontEndOps.Request r = request.r;
+				long upper_bound;
+				if (r.isPurchase) {
+					upper_bound = PURCHASE_TH;
+				}
+				else {
+					upper_bound = BROWSE_TH;
+				}
+				// Drop: don't handle the request if it's already too late
+				endTime = System.currentTimeMillis();
+				if (endTime - request.waiting_time < upper_bound) {
+					SL.processRequest(r);
+					startTime = System.currentTimeMillis();
+				}
+			}
+
+			// check if need to scale down
+			// TODO: define request_rate, add more policies
+			request_rate = 1;
+			endTime = System.currentTimeMillis();
+			if (endTime - startTime > MAX_IDLE_TIME || request_rate < MIN_REQ_RATE) {
+				// scale down only when permitted by the primary server
+				if (prim_server.requestEnd()) {
+					shutdown(vm_id);
+					System.out.println("Scale down! Idle time: " + (endTime - startTime));
+				}
+			}
+		}
+	}
+
+	public static synchronized void main ( String args[] ) throws Exception {
 		if (args.length != 3) throw new Exception("Need 3 args: <cloud_ip> <cloud_port> <VM id>");
 
 		String cloud_ip = args[0];
@@ -122,7 +211,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
 		SL = new ServerLib( cloud_ip, cloud_port );
 
-		// front-end, only get request from clients
+		// prime server, perform as front tier and also manage child servers
 		if (is_primServer(vm_id)) {
 			// No need to createRegistry again
 			Server server = new Server(); 
@@ -137,40 +226,28 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			double CAR = get_avgCAR(tod);
 			System.out.println("Given arrival rate: " + CAR);
 	
-			// Statically decide the num of servers as a starter
-			num_chdServers = (int) (Math.ceil(CAR * 3.9));
-			System.out.println("num_chdServers: " + num_chdServers);
+			// Statically decide the inital number of child servers
+			num_frontTier = (int) (Math.ceil(CAR * 1.3));
+			num_midTier = (int) (Math.ceil(CAR * 3.9));
+			System.out.println("num_frontTier: " + num_frontTier);
+			System.out.println("num_midTier: " + num_midTier);
 			
-			// TODO: scale-out for front-end and maintain record for front-end/middle tier
-
 			int i, chl_vmID;
-			// launch num_chdServers VMs to process the jobs
-			for (i = 0; i < num_chdServers; i++) {
+			// launch inital front tier servers
+			for (i = 0; i < num_frontTier; i++) {
 				chl_vmID = SL.startVM();
+				child_role.put(chl_vmID, "front");
 			}
 
-			while (true) {
-				Cloud.FrontEndOps.Request r = SL.getNextRequest();
-				synchronized (queue_lock) {
-					if (!req_queue.offer(r)) {
-						System.out.println("uncheckedException: Request queue is full accidentally");
-					}
-					req_time.put(r, System.currentTimeMillis());
-				}
-
-				// scale out for app tier
-				// TODO: add more conditions like long reponse time, high load
-				//response_time = 0;
-				//server_load = 0;
-				if (req_queue.size() > num_chdServers * QLEN_FACTOR) {
-					System.out.println("Scale out! Queue size: " + req_queue.size() + 
-									 ", num_servers: " + num_chdServers);
-					chl_vmID = SL.startVM();
-					num_chdServers++;
-				}
+			// launch inital mid tier servers
+			for (i = 0; i < num_midTier; i++) {
+				chl_vmID = SL.startVM();
+				child_role.put(chl_vmID, "middle");
 			}
+
+			frontTier(vm_id);
 		}
-		// application tier, only process request
+		// child servers, front-tier or middle-tier
 		else {
 			// connect to server with Java RMI	
 			try {
@@ -181,37 +258,13 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 				System.out.println("NotBoundException in connection.");
 			}
 
-			// main loop to process jobs
-			while (true) {
-				ReqInfo request = prim_server.getRequest();
-				if (request != null) {
-					Cloud.FrontEndOps.Request r = request.r;
-					long upper_bound;
-					if (r.isPurchase) {
-						upper_bound = PURCHASE_TH;
-					}
-					else {
-						upper_bound = BROWSE_TH;
-					}
-					// Drop: don't handle the request if it's already too late
-					endTime = System.currentTimeMillis();
-					if (endTime - request.waiting_time < upper_bound) {
-						SL.processRequest(r);
-						startTime = System.currentTimeMillis();
-					}
-				}
-
-				// scale down for app-tier
-				// TODO: define request_rate, add more policies
-				request_rate = 1;
-				endTime = System.currentTimeMillis();
-				if (endTime - startTime > MAX_IDLE_TIME || request_rate < MIN_REQ_RATE) {
-					// scale down only with the permission from the primary server
-					if (prim_server.requestEnd()) {
-						shutdown(vm_id);
-						System.out.println("Scale down! Idle time: " + (endTime - startTime));
-					}
-				}
+			// front tier
+			if (prim_server.askRole(vm_id) == "front") {
+				frontTier(vm_id);
+			}
+			// middle tier
+			else {
+				middleTier(vm_id);
 			}
 		}
 	}

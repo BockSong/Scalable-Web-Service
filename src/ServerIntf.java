@@ -11,4 +11,7 @@ public interface ServerIntf extends Remote {
             public Boolean requestEnd()
                             throws RemoteException;
             
+            public String askRole(int vm_id)
+                            throws RemoteException;
+            
 }
