@@ -88,6 +88,18 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	}
 
 	/*
+	 * addRequest: (from a child server) add a request to the queue.
+	 * Return: true for success or false for failure.
+	 */
+	public synchronized Boolean addRequest(Cloud.FrontEndOps.Request r) 
+												throws RemoteException {
+		if (!req_queue.offer(r)) {
+			return false;
+		}
+		return true;
+	};
+
+	/*
 	 * getRequest: get a request from the queue.
 	 * Return: ReqInfo of the request, or null if the queue is empty
 	 */
@@ -128,20 +140,20 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	/*
 	 * frontTier: perform as front tier server, only get request from clients.
 	 */
-	private static synchronized void frontTier(int vm_id) {
+	private static synchronized void frontTier(int vm_id) throws Exception {
 		while (true) {
 			Cloud.FrontEndOps.Request r = SL.getNextRequest();
-			synchronized (queue_lock) {
-				// TODO: if prime_server
-				if (!req_queue.offer(r)) {
-					System.out.println("uncheckedException: Request queue is full accidentally");
-				}
-				req_time.put(r, System.currentTimeMillis());
-			}
 
-			// scale out (iff this is a prime server)
+			// if this is a prime server
 			if (is_primServer(vm_id)) {
 				int chl_vmID;
+				synchronized (queue_lock) {
+					if (!req_queue.offer(r)) {
+						System.out.println("uncheckedException: Request queue is full accidentally");
+					}
+					req_time.put(r, System.currentTimeMillis());
+				}
+
 				// TODO: scale out front tier
 
 				// scale out middle tier
@@ -156,10 +168,16 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 					num_midTier++;
 				}
 			}
-			// check if need to scale down (iff this is a child server)
+			// if this is a child server
 			else {
+				synchronized (queue_lock) {
+					if (!prim_server.addRequest(r)) {
+						System.out.println("uncheckedException: Request queue is full accidentally");
+					}
+					req_time.put(r, System.currentTimeMillis());
+				}
+
 				// TODO: scale down front tier
-				;
 			}
 		}
 	}
