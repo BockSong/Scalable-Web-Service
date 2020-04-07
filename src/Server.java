@@ -23,9 +23,11 @@ import java.rmi.registry.*;
 public class Server extends UnicastRemoteObject implements ServerIntf {
 	// ------------------ Adjustable paramaters ------------------------
 	// for scale up
-	private static double QLEN_FACTOR = 1.6;
+	private static double FRONT_QLEN_FAC = 6.8; // 5
+	private static double MID_QLEN_FAC = 3.5; // 2.5
 	// for scale down
-	private static int MAX_IDLE_TIME = 2300;
+	private static int FRONT_IDLE_MAX = 1200;
+	private static int MID_IDLE_MAX = 2300;
 	private static double MIN_REQ_RATE = 0.6; // not yet used
 	// for drop
 	private static long PURCHASE_TH = 2000;
@@ -44,8 +46,10 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	// interface for the Cache DB (used by middle tier servers)
 	private static CacheIntf db_cache;
 
-	private static long startTime = System.currentTimeMillis();
-	private static long endTime = System.currentTimeMillis();
+	private static long front_startTime = System.currentTimeMillis();
+	private static long front_endTime = System.currentTimeMillis();
+	private static long mid_startTime = System.currentTimeMillis();
+	private static long mid_endTime = System.currentTimeMillis();
 	private static double response_time;
 	private static double server_load;
 	private static double request_rate;
@@ -148,6 +152,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	 */
 	private static synchronized void frontTier(int vm_id) throws Exception {
 		while (true) {
+			front_startTime = System.currentTimeMillis();
 			Cloud.FrontEndOps.Request r = SL.getNextRequest();
 
 			// if this is a prime server
@@ -165,7 +170,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 				//scaling_mid = req_queue.size() / QLEN_FACTOR - num_midTier;
 
 				// scale out front tier
-				if (num_midTier > num_frontTier * 3.5) {
+				if (req_queue.size() > num_frontTier * FRONT_QLEN_FAC) {
 					chl_vmID = SL.startVM();
 					child_role.put(chl_vmID, "front");
 					num_frontTier++;
@@ -176,7 +181,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 				// TODO: add more policies? (like long reponse time, high load)
 				//response_time = 0;
 				//server_load = 0;
-				if (req_queue.size() > num_midTier * QLEN_FACTOR) {
+				if (req_queue.size() > num_midTier * MID_QLEN_FAC) {
 					chl_vmID = SL.startVM();
 					child_role.put(chl_vmID, "middle");
 					num_midTier++;
@@ -188,13 +193,15 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 				if (!prim_server.addRequest(r)) {
 					System.out.println("uncheckedException: Request queue is full accidentally");
 				}
-				req_time.put(r, System.currentTimeMillis());
+				front_endTime = System.currentTimeMillis();
+				req_time.put(r, front_endTime);
 
 				// scale down front tier
-				if (num_midTier < num_frontTier * 2.5) {
+				if (front_endTime - front_startTime > FRONT_IDLE_MAX) {
 					SL.unregister_frontend();
 					shutdown(vm_id);
-					System.out.println("Scaled down front tier. #: " + num_frontTier);
+					System.out.println("Scaled down front tier. Idle time: " 
+										+ (front_endTime - front_startTime));
 				}
 			}
 		}
@@ -209,18 +216,18 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			ReqInfo request = prim_server.getRequest();
 			if (request != null) {
 				Cloud.FrontEndOps.Request r = request.r;
-				endTime = System.currentTimeMillis();
+				mid_endTime = System.currentTimeMillis();
 				// for purchase request, go to the real DB
 				if (r.isPurchase) {
 					// Drop (ignore) the request if it's already too late
-					if (endTime - request.waiting_time < PURCHASE_TH) {
+					if (mid_endTime - request.waiting_time < PURCHASE_TH) {
 						SL.processRequest(r);
 					}
 				}
 				// for browse requests, use the cache DB
 				else {
 					// Drop (ignore) the request if it's already too late
-					if (endTime - request.waiting_time < BROWSE_TH) {
+					if (mid_endTime - request.waiting_time < BROWSE_TH) {
 						// if miss, pull down first
 						String item = r.item;
 						if (db_cache.get(item) == null) {
@@ -235,18 +242,18 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 						SL.processRequest(r, db_cache);
 					}
 				}
-				startTime = System.currentTimeMillis();
+				mid_startTime = System.currentTimeMillis();
 			}
 
 			// check if need to scale down
 			// TODO: define request_rate, add more policies
 			request_rate = 1;
-			endTime = System.currentTimeMillis();
-			if (endTime - startTime > MAX_IDLE_TIME || request_rate < MIN_REQ_RATE) {
+			mid_endTime = System.currentTimeMillis();
+			if (mid_endTime - mid_startTime > MID_IDLE_MAX || request_rate < MIN_REQ_RATE) {
 				// scale down only when permitted by the primary server
 				if (prim_server.requestEnd()) {
 					shutdown(vm_id);
-					System.out.println("Scaled down mid tier. Idle time: " + (endTime - startTime));
+					System.out.println("Scaled down mid tier. Idle time: " + (mid_endTime - mid_startTime));
 				}
 			}
 		}
@@ -284,14 +291,14 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			System.out.println("Given arrival rate: " + CAR);
 	
 			// Statically decide the inital number of child servers
-			num_frontTier = (int) (Math.ceil(CAR * 1.3));
-			num_midTier = (int) (Math.ceil(CAR * 3.9));
-			System.out.println("num_frontTier: " + num_frontTier);
-			System.out.println("num_midTier: " + num_midTier);
+			num_frontTier = Math.max((int) (Math.ceil(CAR * 1.5)), 1);
+			num_midTier = Math.max((int) (Math.ceil(CAR * 3.0)), 1);
+			System.out.println("Initial front tier: " + num_frontTier);
+			System.out.println("Inital middle tier: " + num_midTier);
 			
 			int i, chl_vmID;
 			// launch inital front tier servers
-			for (i = 0; i < num_frontTier; i++) {
+			for (i = 0; i < num_frontTier - 1; i++) {
 				chl_vmID = SL.startVM();
 				child_role.put(chl_vmID, "front");
 			}
