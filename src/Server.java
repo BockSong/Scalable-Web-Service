@@ -224,7 +224,13 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 						// if miss, pull down first
 						String item = r.item;
 						if (db_cache.get(item) == null) {
-							db_cache.set(item, db.get(item), "auth");
+							String reply = db.get(item);
+							db_cache.set(item, reply, "auth");
+							// if it's a item (rather than a category), also set price & qty
+							if (reply.equals("ITEM")) {
+								db_cache.set(item.trim() + "_price", db.get(item + "_price"), "auth");
+								db_cache.set(item.trim() + "_qty", db.get(item + "_qty"), "auth");
+							}
 						}
 						SL.processRequest(r, db_cache);
 					}
@@ -258,8 +264,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
 		// prime server, perform as front tier and also manage child servers
 		if (is_primServer(vm_id)) {
-			// No need to createRegistry again
 			Server server = new Server(); 
+			// No need to createRegistry again
 			Naming.rebind("//localhost:" + cloud_port + "/ServerIntf", server);
 			System.out.println("VM " + vm_id + " (prime server) set up.");
 
@@ -268,6 +274,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	
 			// Run Cache
 			Cache cache = new Cache();
+			LocateRegistry.createRegistry(cloud_port + 1);
 			Naming.rebind("//localhost:" + (cloud_port + 1) + "/CacheIntf", cache);
 			System.out.println("Cache DB set up.");
 
@@ -305,17 +312,18 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 												  + cloud_port + "/ServerIntf");
 				db_cache = (CacheIntf) Naming.lookup("//" + cloud_ip + ":" 
 												+ (cloud_port + 1) + "/CacheIntf");
-				System.out.println("VM " + vm_id + " (app tier) set up, connection built.");
 			} catch (Exception e) {
 				System.out.println("NotBoundException in connection.");
 			}
 
 			// front tier
 			if (prim_server.askRole(vm_id) == "front") {
+				System.out.println("VM " + vm_id + " (front tier) set up, connection built.");
 				frontTier(vm_id);
 			}
 			// middle tier
 			else {
+				System.out.println("VM " + vm_id + " (mid tier) set up, connection built.");
 				middleTier(vm_id);
 			}
 		}
