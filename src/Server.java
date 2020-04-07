@@ -23,12 +23,14 @@ import java.rmi.registry.*;
 public class Server extends UnicastRemoteObject implements ServerIntf {
 	// ------------------ Adjustable paramaters ------------------------
 	// for scale up
-	private static double FRONT_QLEN_FAC = 6.8; // 5
-	private static double MID_QLEN_FAC = 3.5; // 2.5
+	private static double FRONT_QLEN_FAC = 5.8; // 5.8
+	private static double MID_QLEN_FAC = 3.0; // 3.0
 	// for scale down
 	private static int FRONT_IDLE_MAX = 1200;
 	private static int MID_IDLE_MAX = 2300;
-	private static double MIN_REQ_RATE = 0.6; // not yet used
+	private static int FRONT_IDLE_CONS = 550;
+	private static int MID_IDLE_CONS = 650;
+	private static int CONS_QUE_SIZE = 3;
 	// for drop
 	private static long PURCHASE_TH = 2000;
 	private static long BROWSE_TH = 1000;
@@ -46,13 +48,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	// interface for the Cache DB (used by middle tier servers)
 	private static CacheIntf db_cache;
 
-	private static long front_startTime = System.currentTimeMillis();
-	private static long front_endTime = System.currentTimeMillis();
-	private static long mid_startTime = System.currentTimeMillis();
-	private static long mid_endTime = System.currentTimeMillis();
-	private static double response_time;
-	private static double server_load;
-	private static double request_rate;
+	private static long startTime = System.currentTimeMillis();
+	private static long endTime = System.currentTimeMillis();
 	// map the ID of VMs and their roles ("front" or "middle")
 	private static ConcurrentHashMap<Integer, String> child_role = new 
 							ConcurrentHashMap<Integer, String>();
@@ -62,6 +59,9 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	// map the requests and the time they are added
 	private static ConcurrentHashMap<Cloud.FrontEndOps.Request, Long> req_time = new 
 							ConcurrentHashMap<Cloud.FrontEndOps.Request, Long>();
+	// save the 3 latest idle time before requests arrive (used by each mid tier themselves)
+	private static ConcurrentLinkedQueue<Long> req_freq = new 
+							ConcurrentLinkedQueue<Long>();
 	private static Object queue_lock = new Object();  // lock for accessing request's time
 
 	public Server() throws RemoteException {
@@ -85,14 +85,52 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	 * is_primServer: check if a VM process is the primary server
 	 * Return: True for prime server and false for child server
 	 */
-	private static Boolean is_primServer (int vm_id) {
+	private static Boolean is_primServer(int vm_id) {
 		return vm_id == 1;
 	}
 
+	/*
+	 * shutdown: shutdown a VM.
+	 */
 	private static void shutdown(int vm_id) {
 		SL.endVM(vm_id);
 		// TODO: end VMs super cleanly (if needed)
 		//UnicastRemoteObject.unexportObject(this, true);
+	}
+
+	/*
+	 * update_freq: add the latest idle time to the queue and
+	 * 				remove the earliest one (if the queue is 
+	 * 				full of size 3).
+	 * Return: True for success and false for error.
+	 */
+	private static Boolean update_freq(long this_idle) {
+		try {
+			// if the queue is full, remove the head element
+			if (req_freq.size() >= CONS_QUE_SIZE) {
+				req_freq.poll();
+			}
+			req_freq.offer(this_idle);
+			return true;
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
+	/*
+	 * check_freq: check if every 3 latest time are all above the given
+	 * 			   threshold. If so, say it's idle and try to shutdown it.
+	 * Return: True for idle (to be shutdown) and false for not
+	 */
+	private static Boolean check_freq(int th) {
+		if (req_freq.size() <= 1)
+			return false;
+		for (Long time: req_freq) {
+			if (time <= th) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/*
@@ -152,13 +190,12 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	 */
 	private static synchronized void frontTier(int vm_id) throws Exception {
 		while (true) {
-			front_startTime = System.currentTimeMillis();
+			startTime = System.currentTimeMillis();
 			Cloud.FrontEndOps.Request r = SL.getNextRequest();
 
 			// if this is a prime server
 			if (is_primServer(vm_id)) {
 				int chl_vmID;
-				//double scaling_front, scaling_mid;
 				synchronized (queue_lock) {
 					if (!req_queue.offer(r)) {
 						System.out.println("uncheckedException: Request queue is full accidentally");
@@ -166,8 +203,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 					req_time.put(r, System.currentTimeMillis());
 				}
 
-				//scaling_front = 0;
-				//scaling_mid = req_queue.size() / QLEN_FACTOR - num_midTier;
+				// TODO: maybe more policies? (like long response_time, high server_load)
 
 				// scale out front tier
 				if (req_queue.size() > num_frontTier * FRONT_QLEN_FAC) {
@@ -178,9 +214,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 				}
 
 				// scale out middle tier
-				// TODO: add more policies? (like long reponse time, high load)
-				//response_time = 0;
-				//server_load = 0;
 				if (req_queue.size() > num_midTier * MID_QLEN_FAC) {
 					chl_vmID = SL.startVM();
 					child_role.put(chl_vmID, "middle");
@@ -190,18 +223,32 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			}
 			// if this is a child server
 			else {
+				// update the last 3 time records queue
+				if (!update_freq(System.currentTimeMillis() - startTime)) {
+					System.out.println("Error in updating req_freq.");
+				}
+
 				if (!prim_server.addRequest(r)) {
 					System.out.println("uncheckedException: Request queue is full accidentally");
 				}
-				front_endTime = System.currentTimeMillis();
-				req_time.put(r, front_endTime);
+				endTime = System.currentTimeMillis();
+				req_time.put(r, endTime);
+				Long this_idle = endTime - startTime;
 
-				// scale down front tier
-				if (front_endTime - front_startTime > FRONT_IDLE_MAX) {
+				// see if we need to scale down front tier
+				if (this_idle > FRONT_IDLE_MAX || check_freq(FRONT_IDLE_CONS)) {
+					System.out.print("Scaled down front tier. ");
+					if (this_idle > FRONT_IDLE_MAX) {
+						System.out.println("Current idle: " + this_idle);
+					}
+					else {
+						System.out.print("Last 3 time: ");
+						for (Long time: req_freq)
+							System.out.print(time + " ");
+						System.out.println(" ");
+					}
 					SL.unregister_frontend();
 					shutdown(vm_id);
-					System.out.println("Scaled down front tier. Idle time: " 
-										+ (front_endTime - front_startTime));
 				}
 			}
 		}
@@ -215,19 +262,24 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 		while (true) {
 			ReqInfo request = prim_server.getRequest();
 			if (request != null) {
+				// update the last 3 time records queue
+				if (!update_freq(System.currentTimeMillis() - startTime)) {
+					System.out.println("Error in updating req_freq.");
+				}
+	
 				Cloud.FrontEndOps.Request r = request.r;
-				mid_endTime = System.currentTimeMillis();
+				endTime = System.currentTimeMillis();
 				// for purchase request, go to the real DB
 				if (r.isPurchase) {
 					// Drop (ignore) the request if it's already too late
-					if (mid_endTime - request.waiting_time < PURCHASE_TH) {
+					if (endTime - request.waiting_time < PURCHASE_TH) {
 						SL.processRequest(r);
 					}
 				}
 				// for browse requests, use the cache DB
 				else {
 					// Drop (ignore) the request if it's already too late
-					if (mid_endTime - request.waiting_time < BROWSE_TH) {
+					if (endTime - request.waiting_time < BROWSE_TH) {
 						// if miss, pull down first
 						String item = r.item;
 						if (db_cache.get(item) == null) {
@@ -242,18 +294,27 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 						SL.processRequest(r, db_cache);
 					}
 				}
-				mid_startTime = System.currentTimeMillis();
+				startTime = System.currentTimeMillis();
 			}
 
+			endTime = System.currentTimeMillis();
+			Long this_idle = endTime - startTime;
+
 			// check if need to scale down
-			// TODO: define request_rate, add more policies
-			request_rate = 1;
-			mid_endTime = System.currentTimeMillis();
-			if (mid_endTime - mid_startTime > MID_IDLE_MAX || request_rate < MIN_REQ_RATE) {
+			if (this_idle > MID_IDLE_MAX || check_freq(MID_IDLE_CONS)) {
 				// scale down only when permitted by the primary server
 				if (prim_server.requestEnd()) {
+					System.out.print("Scaled down mid tier. ");
+					if (this_idle > MID_IDLE_MAX) {
+						System.out.println("Current idle: " + this_idle);
+					}
+					else {
+						System.out.print("Last 3 time: ");
+						for (Long time: req_freq)
+							System.out.print(time + " ");
+						System.out.println(" ");
+					}
 					shutdown(vm_id);
-					System.out.println("Scaled down mid tier. Idle time: " + (mid_endTime - mid_startTime));
 				}
 			}
 		}
