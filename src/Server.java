@@ -93,10 +93,12 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	 */
 	public synchronized Boolean addRequest(Cloud.FrontEndOps.Request r) 
 												throws RemoteException {
-		if (!req_queue.offer(r)) {
-			return false;
+		synchronized (queue_lock) {
+			if (!req_queue.offer(r)) {
+				return false;
+			}
+			return true;
 		}
-		return true;
 	};
 
 	/*
@@ -147,6 +149,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			// if this is a prime server
 			if (is_primServer(vm_id)) {
 				int chl_vmID;
+				//double scaling_front, scaling_mid;
 				synchronized (queue_lock) {
 					if (!req_queue.offer(r)) {
 						System.out.println("uncheckedException: Request queue is full accidentally");
@@ -154,30 +157,41 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 					req_time.put(r, System.currentTimeMillis());
 				}
 
-				// TODO: scale out front tier
+				//scaling_front = 0;
+				//scaling_mid = req_queue.size() / QLEN_FACTOR - num_midTier;
+
+				// scale out front tier
+				if (num_midTier > num_frontTier * 3.5) {
+					chl_vmID = SL.startVM();
+					child_role.put(chl_vmID, "front");
+					num_frontTier++;
+					System.out.println("Scaled up front tier. #: " + num_frontTier);
+				}
 
 				// scale out middle tier
-				// TODO: add more conditions like long reponse time, high load
-				response_time = 0;
-				server_load = 0;
+				// TODO: add more policies? (like long reponse time, high load)
+				//response_time = 0;
+				//server_load = 0;
 				if (req_queue.size() > num_midTier * QLEN_FACTOR) {
-					System.out.println("Scale up! Queue size: " + req_queue.size() + 
-									", num_midTier: " + num_midTier);
 					chl_vmID = SL.startVM();
 					child_role.put(chl_vmID, "middle");
 					num_midTier++;
+					System.out.println("Scaled up mid tier. #: " + num_midTier);
 				}
 			}
 			// if this is a child server
 			else {
-				synchronized (queue_lock) {
-					if (!prim_server.addRequest(r)) {
-						System.out.println("uncheckedException: Request queue is full accidentally");
-					}
-					req_time.put(r, System.currentTimeMillis());
+				if (!prim_server.addRequest(r)) {
+					System.out.println("uncheckedException: Request queue is full accidentally");
 				}
+				req_time.put(r, System.currentTimeMillis());
 
-				// TODO: scale down front tier
+				// scale down front tier
+				if (num_midTier < num_frontTier * 2.5) {
+					SL.unregister_frontend();
+					shutdown(vm_id);
+					System.out.println("Scaled down front tier. #: " + num_frontTier);
+				}
 			}
 		}
 	}
@@ -214,7 +228,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 				// scale down only when permitted by the primary server
 				if (prim_server.requestEnd()) {
 					shutdown(vm_id);
-					System.out.println("Scale down! Idle time: " + (endTime - startTime));
+					System.out.println("Scaled down mid tier. Idle time: " + (endTime - startTime));
 				}
 			}
 		}
