@@ -7,7 +7,7 @@ import java.util.concurrent.*;
 import java.rmi.Remote;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
-import sun.reflect.generics.reflectiveObjects.NotImplementedException;
+import java.lang.UnsupportedOperationException;
 
 // Cache object definition
 public class Cache extends UnicastRemoteObject implements CacheIntf {
@@ -35,8 +35,7 @@ public class Cache extends UnicastRemoteObject implements CacheIntf {
 
 	public boolean transaction(String item, float price, int qty)
 			                                    throws RemoteException {
-        throw NotImplementedException;
-		return false;
+        throw new UnsupportedOperationException();
 	}
 
 }
