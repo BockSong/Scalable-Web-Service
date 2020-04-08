@@ -5,7 +5,7 @@ import java.rmi.RemoteException;
 
 // Indicates remote interface description
 public interface ServerIntf extends Remote {
-            public Boolean addRequest(Cloud.FrontEndOps.Request r)
+            public Boolean addRequest(Cloud.FrontEndOps.Request r, long time)
                             throws RemoteException;
 
             public ReqInfo getRequest()
