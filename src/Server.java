@@ -41,8 +41,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static int num_midTier; 
 	// serverLib to access the database
 	private static ServerLib SL;
-	// db object to get value cached to local
-	private static Cloud.DatabaseOps db;
 	// interface for the primary server (used by child servers)
 	private static ServerIntf prim_server;
 	// interface for the Cache DB (used by middle tier servers)
@@ -203,8 +201,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 					req_time.put(r, System.currentTimeMillis());
 				}
 
-				// TODO: more scaling up policies? (like long response_time, high server_load)
-
 				// scale out front tier
 				if (req_queue.size() > num_frontTier * FRONT_QLEN_FAC) {
 					chl_vmID = SL.startVM();
@@ -269,30 +265,18 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	
 				Cloud.FrontEndOps.Request r = request.r;
 				endTime = System.currentTimeMillis();
-				// for purchase request, go to the real DB
+				long upper_bound;
+				
+				// Drop (ignore) the request if it's already too late
 				if (r.isPurchase) {
-					// Drop (ignore) the request if it's already too late
-					if (endTime - request.waiting_time < PURCHASE_TH) {
-						SL.processRequest(r);
-					}
+					upper_bound = PURCHASE_TH;
 				}
-				// for browse requests, use the cache DB
 				else {
-					// Drop (ignore) the request if it's already too late
-					if (endTime - request.waiting_time < BROWSE_TH) {
-						// if miss, pull down first
-						String item = r.item;
-						if (db_cache.get(item) == null) {
-							String reply = db.get(item);
-							db_cache.set(item, reply, "auth");
-							// if it's a item (rather than a category), also set price & qty
-							if (reply.equals("ITEM")) {
-								db_cache.set(item.trim() + "_price", db.get(item + "_price"), "auth");
-								db_cache.set(item.trim() + "_qty", db.get(item + "_qty"), "auth");
-							}
-						}
-						SL.processRequest(r, db_cache);
-					}
+					upper_bound = BROWSE_TH;
+				}
+				if (endTime - request.waiting_time < upper_bound) {
+					// pass all requests to cache
+					SL.processRequest(r, db_cache);
 				}
 				startTime = System.currentTimeMillis();
 			}
@@ -328,7 +312,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 		int vm_id = Integer.parseInt(args[2]);
 
 		SL = new ServerLib( cloud_ip, cloud_port );
-		db = SL.getDB();
 
 		// prime server, perform as front tier and also manage child servers
 		if (is_primServer(vm_id)) {
@@ -341,7 +324,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			SL.register_frontend();
 	
 			// Run Cache
-			Cache cache = new Cache();
+			Cache cache = new Cache(SL);
 			LocateRegistry.createRegistry(cloud_port + 1);
 			Naming.rebind("//localhost:" + (cloud_port + 1) + "/CacheIntf", cache);
 			System.out.println("Cache DB set up.");

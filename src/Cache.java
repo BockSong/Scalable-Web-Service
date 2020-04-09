@@ -7,35 +7,35 @@ import java.util.concurrent.*;
 import java.rmi.Remote;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
-import java.lang.UnsupportedOperationException;
 
 // Cache object definition
 public class Cache extends UnicastRemoteObject implements CacheIntf {
+	// db object to get value cached to local
+	private static Cloud.DatabaseOps db;
 	// caching for key and set
-	private static ConcurrentHashMap<String, String> key_set = new 
+	private static ConcurrentHashMap<String, String> key_val = new 
 							ConcurrentHashMap<String, String>();
 
-	public Cache() throws RemoteException {
-		super(0);
+	public Cache(ServerLib SL) throws RemoteException {
+		db = SL.getDB();
 	}
 
 	public synchronized String get(String key) throws RemoteException {
-		return key_set.getOrDefault(key, null);
+        // if miss, pull down first
+        if (!key_val.containsKey(key)) {
+            key_val.put(key, db.get(key));
+        }
+		return key_val.get(key);
 	}
 
     public synchronized boolean set(String key, String val, String auth) 
                                                 throws RemoteException {
-        try {
-            key_set.put(key, val);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
+        return db.set(key, val, auth);
 	}
 
 	public boolean transaction(String item, float price, int qty)
 			                                    throws RemoteException {
-        throw new UnsupportedOperationException();
+        return db.transaction(item, price, qty);
 	}
 
 }
