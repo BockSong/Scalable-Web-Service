@@ -29,7 +29,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static double FRONT_QLEN_FAC = 6.8; // 5/6.8
 	private static double MID_QLEN_FAC = 3.5; // 3.0/5
 	// for scale down
-	private static int FRONT_IDLE_MAX = 1150; // or 110
+	private static int FRONT_IDLE_MAX = 1150; // or 1100
 	private static int MID_IDLE_MAX = 2150; // or 2100
 	private static int FRONT_IDLE_CONS = 550;
 	private static int MID_IDLE_CONS = 650;
@@ -40,6 +40,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	// other
 	private static int MIN_NUM = 1;
 	// -----------------------------------------------------------------
+
+	private static Boolean DEBUG = true; 
 
 	// number of child servers
 	private static int num_frontTier; 
@@ -209,8 +211,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 					chl_vmID = SL.startVM();
 					child_role.put(chl_vmID, "front");
 					num_frontTier++;
-					// TODO: remove debugging print
-					System.out.println("Scaled up front tier. #: " + num_frontTier);
+					if (DEBUG)
+						System.out.println("Scaled up front tier. #: " + num_frontTier);
 				}
 
 				// scale out middle tier
@@ -218,8 +220,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 					chl_vmID = SL.startVM();
 					child_role.put(chl_vmID, "middle");
 					num_midTier++;
-					// TODO: remove debugging print
-					System.out.println("Scaled up mid tier. #: " + num_midTier);
+					if (DEBUG)
+						System.out.println("Scaled up mid tier. #: " + num_midTier);
 				}
 			}
 			// if this is a child server
@@ -238,16 +240,17 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
 				// see if we need to scale down front tier
 				if (this_idle > FRONT_IDLE_MAX || check_freq(FRONT_IDLE_CONS)) {
-					// TODO: remove debugging print
-					System.out.print("Scaled down front tier. ");
-					if (this_idle > FRONT_IDLE_MAX) {
-						System.out.println("Current idle: " + this_idle);
-					}
-					else {
-						System.out.print("Last 3 time: ");
-						for (Long time: req_freq)
-							System.out.print(time + " ");
-						System.out.println(" ");
+					if (DEBUG) {
+						System.out.print("Scaled down front tier. ");
+						if (this_idle > FRONT_IDLE_MAX) {
+							System.out.println("Current idle: " + this_idle);
+						}
+						else {
+							System.out.print("Last 3 time: ");
+							for (Long time: req_freq)
+								System.out.print(time + " ");
+							System.out.println(" ");
+						}
 					}
 					SL.unregister_frontend();
 					shutdown(vm_id);
@@ -294,16 +297,17 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			if (this_idle > MID_IDLE_MAX || check_freq(MID_IDLE_CONS)) {
 				// scale down only when permitted by the primary server
 				if (prim_server.requestEnd()) {
-					// TODO: remove debugging print
-					System.out.print("Scaled down mid tier. ");
-					if (this_idle > MID_IDLE_MAX) {
-						System.out.println("Current idle: " + this_idle);
-					}
-					else {
-						System.out.print("Last 3 time: ");
-						for (Long time: req_freq)
-							System.out.print(time + " ");
-						System.out.println(" ");
+					if (DEBUG) {
+						System.out.print("Scaled down mid tier. ");
+						if (this_idle > MID_IDLE_MAX) {
+							System.out.println("Current idle: " + this_idle);
+						}
+						else {
+							System.out.print("Last 3 time: ");
+							for (Long time: req_freq)
+								System.out.print(time + " ");
+							System.out.println(" ");
+						}
 					}
 					shutdown(vm_id);
 				}
@@ -326,8 +330,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			Server server = new Server(); 
 			// No need to createRegistry again
 			Naming.rebind("//localhost:" + cloud_port + "/ServerIntf", server);
-			// TODO: remove debugging print
-			System.out.println("VM " + vm_id + " (prime server) set up.");
+			if (DEBUG)
+				System.out.println("VM " + vm_id + " (prime server) set up.");
 
 			// register with load balancer so requests are sent to this server
 			SL.register_frontend();
@@ -336,21 +340,22 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			Cache cache = new Cache(SL);
 			LocateRegistry.createRegistry(cloud_port + MIN_NUM);
 			Naming.rebind("//localhost:" + (cloud_port + MIN_NUM) + "/CacheIntf", cache);
-			// TODO: remove debugging print
-			System.out.println("Cache DB set up.");
+			if (DEBUG)
+				System.out.println("Cache DB set up.");
 
 			// start to deal with scaling
 			int tod = (int) SL.getTime();
 			double CAR = get_avgCAR(tod);
-			// TODO: remove debugging print
-			System.out.println("Given arrival rate: " + CAR);
+			if (DEBUG)
+				System.out.println("Given arrival rate: " + CAR);
 	
 			// Statically decide the inital number of child servers
 			num_frontTier = Math.max((int) (Math.ceil(CAR * FRONT_INIT)), MIN_NUM);
 			num_midTier = Math.max((int) (Math.ceil(CAR * MID_INIT)), MIN_NUM);
-			// TODO: remove debugging print
-			System.out.println("Inital front tier: " + num_frontTier);
-			System.out.println("Inital middle tier: " + num_midTier);
+			if (DEBUG) {
+				System.out.println("Inital front tier: " + num_frontTier);
+				System.out.println("Inital middle tier: " + num_midTier);
+			}
 			
 			int i, chl_vmID;
 			// launch inital front tier servers (prime server itself has been launched)
@@ -381,15 +386,15 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
 			// front tier
 			if (prim_server.askRole(vm_id).equals("front")) {
-				// TODO: remove debugging print
-				System.out.println("VM " + vm_id + " (front tier) set up.");
+				if (DEBUG)
+					System.out.println("VM " + vm_id + " (front tier) set up.");
 				SL.register_frontend();
 				frontTier(vm_id);
 			}
 			// middle tier
 			else {
-				// TODO: remove debugging print
-				System.out.println("VM " + vm_id + " (mid tier) set up.");
+				if (DEBUG)
+					System.out.println("VM " + vm_id + " (mid tier) set up.");
 				middleTier(vm_id);
 			}
 		}
