@@ -26,8 +26,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static double FRONT_INIT = 1.5;
 	private static double MID_INIT = 3.0;
 	// for scale up
-	private static double FRONT_QLEN_FAC = 6.8; // 5/6.8
-	private static double MID_QLEN_FAC = 3.5; // 3.0/5
+	private static double FRONT_QLEN_FAC = 14.8; // 14.8, 6.8
+	private static double MID_QLEN_FAC = 5.5; // 7.5, 3.5
 	// for scale down
 	private static int FRONT_IDLE_MAX = 1150; // or 1100
 	private static int MID_IDLE_MAX = 2150; // or 2100
@@ -39,6 +39,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static long BROWSE_TH = 850;
 	// other
 	private static int MIN_NUM = 1;
+	private static int PORT_OFFSET = 1;
 	// -----------------------------------------------------------------
 
 	private static Boolean DEBUG = true; 
@@ -168,8 +169,9 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	};
 
 	/*
-	 * requestEnd: (child server) request a permission to terminate itself.
-	 * 			  primary server reject it if there will be too few servers.
+	 * requestEnd: (a child middle tier server) request a permission to 
+	 * 			   terminate itself. primary server reject it if there 
+	 * 			   will be too few servers.
 	 * Return: True for permiting or false for not
 	 */
 	public Boolean requestEnd() throws RemoteException {
@@ -178,6 +180,14 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			return true;
 		}
 		return false;
+	}
+
+	/*
+	 * notifyEnd: (a child front tier server) notify the prime server
+	 * 			  that it will terminate itself.
+	 */
+	public void notifyEnd() throws RemoteException {
+		num_frontTier -= 1;
 	}
 
 	/*
@@ -240,6 +250,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
 				// see if we need to scale down front tier
 				if (this_idle > FRONT_IDLE_MAX || check_freq(FRONT_IDLE_CONS)) {
+					prim_server.notifyEnd();
 					if (DEBUG) {
 						System.out.print("Scaled down front tier. ");
 						if (this_idle > FRONT_IDLE_MAX) {
@@ -338,8 +349,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	
 			// Run Cache
 			Cache cache = new Cache(SL);
-			LocateRegistry.createRegistry(cloud_port + MIN_NUM);
-			Naming.rebind("//localhost:" + (cloud_port + MIN_NUM) + "/CacheIntf", cache);
+			LocateRegistry.createRegistry(cloud_port + PORT_OFFSET);
+			Naming.rebind("//localhost:" + (cloud_port + PORT_OFFSET) + "/CacheIntf", cache);
 			if (DEBUG)
 				System.out.println("Cache DB set up.");
 
@@ -379,7 +390,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 				prim_server = (ServerIntf) Naming.lookup("//" + cloud_ip + ":" 
 												  + cloud_port + "/ServerIntf");
 				db_cache = (CacheIntf) Naming.lookup("//" + cloud_ip + ":" 
-												+ (cloud_port + MIN_NUM) + "/CacheIntf");
+												+ (cloud_port + PORT_OFFSET) + "/CacheIntf");
 			} catch (Exception e) {
 				System.out.println("NotBoundException in connection.");
 			}
