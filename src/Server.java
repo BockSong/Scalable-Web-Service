@@ -41,6 +41,16 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static long INIT_PERIOD = 4500;
 	private static long ESTI_TIME = 1000;
 	private static long ESTI_GAP = 35000;
+
+	private static double LF_NOR = 1.2;
+	private static double LF_LOW = 1.08;
+	private static double LF_MED = 0.7;
+	private static double LF_HIGH = 0.46;
+
+	private static int L_LOW = 3;
+	private static int L_MED = 8;
+	private static int N_MANY_INIT = 6;
+	private static int N_MANY_MID = 8;
 	// other
 	private static int MIN_NUM = 1;
 	private static int MIN_INIT = 1;
@@ -252,18 +262,14 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 				long i = cur_time / ESTI_GAP;
 				cur_time = cur_time % ESTI_GAP;
 
-				/*private static double L_NOR = 1.2;
-				private static double L_LOW = 1.08;
-				private static double L_MED = 0.7;
-				private static double L_HIGH = 0.5;*/
 				if (cur_time < ESTI_TIME) {
 					// first interval in the very beginning
 					if (i == 0) {
 						if (DEBUG)  System.out.println("At interval " + i + ", q_len: " + 
 														req_queue.size() + " load come ");
 						// if already have many servers, slow down the speed of scaling a bit
-						if (num_midTier >= 6) {
-							loadFactor = 1.2;
+						if (num_midTier >= N_MANY_INIT) {
+							loadFactor = LF_NOR;
 							if (DEBUG)  System.out.println("loadFactor: " + loadFactor);
 						}
 					}
@@ -273,25 +279,26 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 						if (DEBUG)  System.out.print("At interval " + i + ", q_len: " + 
 														req_queue.size() + " load: " + load);
 						// dynamiaclly adjust load factor
-						if (loadFactor == 1.2) {
+						if (loadFactor == LF_NOR) {
+							// if it's in normal pace, remain the same
 							if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
 						}
-						else if (load < 3) {
+						else if (load < L_LOW) {
 							// low load, slow down a bit
-							loadFactor = 1.08;
+							loadFactor = LF_LOW;
 							if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
 						}
-						else if (load < 8) {
+						else if (load < L_MED) {
 							// medium load, speed up
-							loadFactor = 0.7;
+							loadFactor = LF_MED;
 							if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
 						}
 						else {
 							// high load, speed up a lot
-							loadFactor = 0.5;
+							loadFactor = LF_HIGH;
 							if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
 							// if don't have many servers, launch some immediately
-							while (num_midTier < 8) {
+							while (num_midTier < N_MANY_MID) {
 								launch_midTier();
 							}
 						}
