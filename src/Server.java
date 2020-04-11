@@ -43,12 +43,10 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static long ESTI_GAP = 35000;
 	// other
 	private static int MIN_NUM = 1;
-	private static int MIN_FRONT = 1;
-	private static int MIN_MID = 1;
+	private static int MIN_INIT = 1;
+	private static int VMID_PRIME = 1;
 	private static int PORT_OFFSET = 1;
 	// -----------------------------------------------------------------
-
-	private static Boolean DEBUG = true; 
 
 	// number of child servers
 	private static int num_frontTier; 
@@ -66,8 +64,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static long initTime = System.currentTimeMillis();
 	// dynamic load. used by the prime server
 	private static int load = 0;
-	// dynamic load. used by the prime server
-	private static int load_2 = 0;
 	// dynamic queue load factor. used by the prime server
 	private static double loadFactor = 1;
 	// map the ID of VMs and their roles ("front" or "middle")
@@ -84,6 +80,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 							ConcurrentLinkedQueue<Long>();
 	private static Object queue_lock = new Object();  // lock for accessing req_time
 
+	private static Boolean DEBUG = true; 
+
 	public Server() throws RemoteException {
 		super(0);
 	}
@@ -96,7 +94,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 						  0.3, 0.1, 0.1, 0.1, 0.2, 
 						  0.3, 0.7, 1.0, 0.8, 0.8,
 						  0.8, 1.0, 1.1, 1.0, 0.8,
-						  0.7, 0.8, 1.0, 1.2, 1.5,
+						  0.7, 0.8, 1.0, 1.2, 2.0,
 						  1.4, 1.0, 0.8};
 		return avgCAR[hour];
 	}
@@ -106,7 +104,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	 * Return: True for prime server and false for child server
 	 */
 	private static Boolean is_primServer(int vm_id) {
-		return vm_id == 1;
+		return vm_id == VMID_PRIME;
 	}
 
 	/*
@@ -244,71 +242,60 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			if (is_primServer(vm_id)) {
 				long cur_time = System.currentTimeMillis() - initTime;
 
-				// During the period of launch the first middle tier server,
-				// Prime server will take this responsibility temporarily
-				/*if ((cur_time > 550) && (cur_time < INIT_PERIOD) && (!busyStart)) {
-					if (DEBUG)
-						System.out.println("Dropped! ");
-					SL.drop(r);
-					//SL.processRequest(r);
-				}
-				else {*/
 				synchronized (queue_lock) {
 					if (!req_queue.offer(r)) {
 						System.out.println("UncheckedException: req_queue is full");
 					}
 					req_time.put(r, System.currentTimeMillis());
 				}
-				//}
 
-				// estimate load during the interval
-				if (cur_time < 0 + ESTI_TIME) {
-					load += 1;
-					if (DEBUG) {
-						System.out.println("At interval 1, q_len: " + req_queue.size() + " load: " + load);
-					}
-				}
+				long i = cur_time / ESTI_GAP;
+				cur_time = cur_time % ESTI_GAP;
 
-				/*long i = cur_time / ESTI_GAP;
-				cur_time = cur_time % ESTI_GAP;*/
-
-				// estimate load during the interval
-				// TODO: write a loop for this, for longer cases
-				if ((cur_time > ESTI_GAP) && (cur_time < ESTI_GAP + ESTI_TIME)) {
-					load_2 += 1;
-					if (DEBUG) {
-						System.out.print("At interval 2, q_len: " + req_queue.size() + " load: " + load_2);
-					}
-					// dynamiaclly adjust load factor
-					if (load_2 < 3) {
-						// low load, slow down a bit
-						loadFactor = 1.08;
-						if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
-					}
-					else if (load_2 < 8) {
-						// medium load, speed up
-						loadFactor = 0.7;
-						if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
-					}
-					else {
-						// high load, speed up a lot
-						loadFactor = 0.5;
-						if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
-						// if don't have many servers, launch some immediately
-						while (num_midTier < 8) {
-							launch_midTier();
+				/*private static double L_NOR = 1.2;
+				private static double L_LOW = 1.08;
+				private static double L_MED = 0.7;
+				private static double L_HIGH = 0.5;*/
+				if (cur_time < ESTI_TIME) {
+					// first interval in the very beginning
+					if (i == 0) {
+						if (DEBUG)  System.out.println("At interval " + i + ", q_len: " + 
+														req_queue.size() + " load come ");
+						// if already have many servers, slow down the speed of scaling a bit
+						if (num_midTier >= 6) {
+							loadFactor = 1.2;
+							if (DEBUG)  System.out.println("loadFactor: " + loadFactor);
 						}
 					}
-					/*else if (req_queue.size() > 7) {
-						// high load && high queue length, speed up a lot
-						loadFactor = 0.6;
-						System.out.println(", loadFactor: " + loadFactor);
-					}
+					// estimate load during runtime
 					else {
-						// high load && normal queue length, slow down a bit
-						loadFactor = 1.06;
-						System.out.println(", loadFactor: " + loadFactor);
-					}*/
+						load += 1;
+						if (DEBUG)  System.out.print("At interval " + i + ", q_len: " + 
+														req_queue.size() + " load: " + load);
+						// dynamiaclly adjust load factor
+						if (loadFactor == 1.2) {
+							if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
+						}
+						else if (load < 3) {
+							// low load, slow down a bit
+							loadFactor = 1.08;
+							if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
+						}
+						else if (load < 8) {
+							// medium load, speed up
+							loadFactor = 0.7;
+							if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
+						}
+						else {
+							// high load, speed up a lot
+							loadFactor = 0.5;
+							if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
+							// if don't have many servers, launch some immediately
+							while (num_midTier < 8) {
+								launch_midTier();
+							}
+						}
+					}
 				}
 
 				// scale out front tier
@@ -449,8 +436,8 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 				System.out.println("Given arrival rate: " + CAR);
 	
 			// Statically decide the inital number of child servers
-			num_frontTier = Math.max((int) (Math.ceil(CAR * FRONT_INIT)), MIN_FRONT);
-			num_midTier = Math.max((int) (Math.ceil(CAR * MID_INIT)), MIN_MID);
+			num_frontTier = Math.max((int) (Math.ceil(CAR * FRONT_INIT)), MIN_INIT);
+			num_midTier = Math.max((int) (Math.ceil(CAR * MID_INIT)), MIN_INIT);
 			if (DEBUG) {
 				System.out.println("Inital front tier: " + num_frontTier);
 				System.out.println("Inital middle tier: " + num_midTier);
