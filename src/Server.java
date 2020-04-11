@@ -42,14 +42,14 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	private static long ESTI_TIME = 1000;
 	private static long ESTI_GAP = 35000;
 
-	private static double LF_NOR = 1.2;
+	private static double LF_NOR = 1.09;
 	private static double LF_LOW = 1.08;
 	private static double LF_MED = 0.7;
-	private static double LF_HIGH = 0.46;
+	private static double LF_HIGH = 0.49;
 
 	private static int L_LOW = 3;
 	private static int L_MED = 8;
-	private static int N_MANY_INIT = 6;
+	private static int N_MANY_INIT = 5;
 	private static int N_MANY_MID = 8;
 	// other
 	private static int MIN_NUM = 1;
@@ -104,7 +104,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 						  0.3, 0.1, 0.1, 0.1, 0.2, 
 						  0.3, 0.7, 1.0, 0.8, 0.8,
 						  0.8, 1.0, 1.1, 1.0, 0.8,
-						  0.7, 0.8, 1.0, 1.2, 2.0,
+						  0.7, 0.8, 1.0, 1.2, 1.5,
 						  1.4, 1.0, 0.8};
 		return avgCAR[hour];
 	}
