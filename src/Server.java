@@ -110,6 +110,26 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 	}
 
 	/*
+	 * launch_frontTier: launch a new front tier server.
+	 */
+	private static void launch_frontTier() {
+		int chl_vmID = SL.startVM();
+		child_role.put(chl_vmID, "front");
+		num_frontTier++;
+		if (DEBUG)  System.out.println("Scaled up front tier. #: " + num_frontTier);
+	}
+
+	/*
+	 * launch_midTier: launch a new middle tier server.
+	 */
+	private static void launch_midTier() {
+		int chl_vmID = SL.startVM();
+		child_role.put(chl_vmID, "middle");
+		num_midTier++;
+		if (DEBUG)  System.out.println("Scaled up mid tier. #: " + num_midTier);
+	}
+
+	/*
 	 * shutdown: shutdown a VM.
 	 */
 	private static void shutdown(int vm_id) {
@@ -222,7 +242,6 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
 			// if this is a prime server
 			if (is_primServer(vm_id)) {
-				int chl_vmID;
 				long cur_time = System.currentTimeMillis() - initTime;
 
 				// During the period of launch the first middle tier server,
@@ -263,18 +282,22 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 					// dynamiaclly adjust load factor
 					if (load_2 < 3) {
 						// low load, slow down a bit
-						loadFactor = 1.05;
-						System.out.println(", loadFactor: " + loadFactor);
+						loadFactor = 1.08;
+						if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
 					}
-					else if (load_2 < 6) {
-						// medium load, speed up a bit
-						loadFactor = 0.8;
-						System.out.println(", loadFactor: " + loadFactor);
+					else if (load_2 < 8) {
+						// medium load, speed up
+						loadFactor = 0.7;
+						if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
 					}
 					else {
 						// high load, speed up a lot
-						loadFactor = 0.6;
-						System.out.println(", loadFactor: " + loadFactor);
+						loadFactor = 0.5;
+						if (DEBUG)  System.out.println(", loadFactor: " + loadFactor);
+						// if don't have many servers, launch some immediately
+						while (num_midTier < 8) {
+							launch_midTier();
+						}
 					}
 					/*else if (req_queue.size() > 7) {
 						// high load && high queue length, speed up a lot
@@ -290,20 +313,12 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
 				// scale out front tier
 				if (req_queue.size() > num_frontTier * (FRONT_QLEN_FAC * loadFactor)) {
-					chl_vmID = SL.startVM();
-					child_role.put(chl_vmID, "front");
-					num_frontTier++;
-					if (DEBUG)
-						System.out.println("Scaled up front tier. #: " + num_frontTier);
+					launch_frontTier();
 				}
 
 				// scale out middle tier
 				if (req_queue.size() > num_midTier * (MID_QLEN_FAC * loadFactor)) {
-					chl_vmID = SL.startVM();
-					child_role.put(chl_vmID, "middle");
-					num_midTier++;
-					if (DEBUG)
-						System.out.println("Scaled up mid tier. #: " + num_midTier);
+					launch_midTier();
 				}
 			}
 			// if this is a child server
@@ -416,8 +431,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			Server server = new Server(); 
 			// No need to createRegistry again
 			Naming.rebind("//localhost:" + cloud_port + "/ServerIntf", server);
-			if (DEBUG)
-				System.out.println("VM " + vm_id + " (prime server) set up.");
+			if (DEBUG)  System.out.println("VM " + vm_id + " (prime server) set up.");
 
 			// register with load balancer so requests are sent to this server
 			SL.register_frontend();
@@ -426,8 +440,7 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 			Cache cache = new Cache(SL);
 			LocateRegistry.createRegistry(cloud_port + PORT_OFFSET);
 			Naming.rebind("//localhost:" + (cloud_port + PORT_OFFSET) + "/CacheIntf", cache);
-			if (DEBUG)
-				System.out.println("Cache DB set up.");
+			if (DEBUG)  System.out.println("Cache DB set up.");
 
 			// start to deal with scaling
 			int tod = (int) SL.getTime();
@@ -472,15 +485,13 @@ public class Server extends UnicastRemoteObject implements ServerIntf {
 
 			// front tier
 			if (prim_server.askRole(vm_id).equals("front")) {
-				if (DEBUG)
-					System.out.println("VM " + vm_id + " (front tier) set up.");
+				if (DEBUG)  System.out.println("VM " + vm_id + " (front tier) set up.");
 				SL.register_frontend();
 				frontTier(vm_id);
 			}
 			// middle tier
 			else {
-				if (DEBUG)
-					System.out.println("VM " + vm_id + " (mid tier) set up.");
+				if (DEBUG)  System.out.println("VM " + vm_id + " (mid tier) set up.");
 				middleTier(vm_id);
 			}
 		}
